@@ -1,0 +1,58 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/emman/Tailor-Backend/internal/database"
+	"github.com/emman/Tailor-Backend/internal/handlers"
+	"github.com/emman/Tailor-Backend/internal/repository"
+	"github.com/emman/Tailor-Backend/internal/routes"
+	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
+	"github.com/rs/cors"
+)
+
+func main() {
+	// Load .env file
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using default environment variables")
+	}
+
+	// Connect to Database
+	database.ConnectDB()
+
+	// Initialize Repositories
+	customerRepo := repository.NewCustomerRepository()
+	measurementRepo := repository.NewMeasurementRepository()
+
+	// Initialize Handler
+	h := handlers.NewHandler(customerRepo, measurementRepo)
+
+	// Initialize Router
+	r := mux.NewRouter()
+
+	// Register Routes
+	routes.RegisterRoutes(r, h)
+
+	// CORS Handling
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:5173", "http://localhost:5174"}, // Add both common Vite ports
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowCredentials: true,
+	})
+
+	handler := c.Handler(r)
+
+	// Start Server
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	fmt.Printf("🚀 TailorVoice Backend running on http://localhost:%s\n", port)
+	log.Fatal(http.ListenAndServe(":"+port, handler))
+}

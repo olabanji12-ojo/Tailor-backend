@@ -1,6 +1,9 @@
 package routes
 
 import (
+	"fmt"
+	"net/http"
+
 	"github.com/emman/Tailor-Backend/internal/handlers"
 	"github.com/gorilla/mux"
 )

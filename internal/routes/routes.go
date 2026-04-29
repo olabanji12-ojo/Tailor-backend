@@ -7,6 +7,12 @@ import (
 
 func RegisterRoutes(r *mux.Router, h *handlers.Handler) {
 	api := r.PathPrefix("/api").Subrouter()
+	
+	// Home Route
+	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"status": "active", "message": "TailorVoice API is running"}`)
+	}).Methods("GET")
 
 	api.HandleFunc("/customers", h.GetCustomers).Methods("GET")
 	api.HandleFunc("/measurements", h.GetMeasurements).Methods("GET")

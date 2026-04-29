@@ -32,6 +32,11 @@ func (r *MeasurementRepository) Save(ctx context.Context, m *models.Measurement)
 	return nil
 }
 
+func (r *MeasurementRepository) Update(ctx context.Context, id primitive.ObjectID, data map[string]float64) error {
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"data": data}})
+	return err
+}
+
 func (r *MeasurementRepository) GetAll(ctx context.Context) ([]models.Measurement, error) {
 	opts := options.Find().SetSort(bson.M{"date": -1}) // Newest first
 	cursor, err := r.collection.Find(ctx, bson.M{}, opts)

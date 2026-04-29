@@ -1,9 +1,13 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/emman/Tailor-Backend/internal/models"
@@ -12,6 +16,61 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
+
+func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
+	// 1. Get the file from the request
+	err := r.ParseMultipartForm(10 << 20) // 10 MB max
+	if err != nil {
+		http.Error(w, "File too large", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("audio")
+	if err != nil {
+		http.Error(w, "Audio file is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// 2. Prepare the request to OpenAI
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		http.Error(w, "OpenAI API Key not configured", http.StatusInternalServerError)
+		return
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", header.Filename)
+	if err != nil {
+		http.Error(w, "Failed to create multipart form", http.StatusInternalServerError)
+		return
+	}
+	io.Copy(part, file)
+	writer.WriteField("model", "whisper-1")
+	writer.Close()
+
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/audio/transcriptions", body)
+	if err != nil {
+		http.Error(w, "Failed to create OpenAI request", http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// 3. Execute the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "Failed to connect to OpenAI", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 4. Proxy the response back to the client
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}
 
 type Handler struct {
 	customerRepo    *repository.CustomerRepository

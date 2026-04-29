@@ -13,4 +13,5 @@ func RegisterRoutes(r *mux.Router, h *handlers.Handler) {
 	api.HandleFunc("/measurements", h.SaveMeasurement).Methods("POST")
 	api.HandleFunc("/measurements/{id}", h.UpdateMeasurement).Methods("PUT")
 	api.HandleFunc("/customers/{id}/measurements", h.GetCustomerHistory).Methods("GET")
+	api.HandleFunc("/transcribe", h.Transcribe).Methods("POST")
 }

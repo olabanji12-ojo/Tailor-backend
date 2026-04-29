@@ -1,0 +1,29 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with Litmus
+6.out
+*.c
+*.p
+*.prof
+
+# Dependency directories (remove comment out if you want to vendor)
+# vendor/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -32,14 +32,23 @@ func (r *MeasurementRepository) Save(ctx context.Context, m *models.Measurement)
 	return nil
 }
 
-func (r *MeasurementRepository) Update(ctx context.Context, id primitive.ObjectID, data map[string]float64) error {
-	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"data": data}})
+func (r *MeasurementRepository) Update(ctx context.Context, id primitive.ObjectID, updates map[string]interface{}) error {
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": updates})
 	return err
 }
 
-func (r *MeasurementRepository) GetAll(ctx context.Context) ([]models.Measurement, error) {
-	opts := options.Find().SetSort(bson.M{"date": -1}) // Newest first
-	cursor, err := r.collection.Find(ctx, bson.M{}, opts)
+func (r *MeasurementRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
+	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+func (r *MeasurementRepository) GetAll(ctx context.Context, shopID string) ([]models.Measurement, error) {
+	opts := options.Find().SetSort(bson.M{"date": -1})
+	filter := bson.M{}
+	if shopID != "" {
+		filter = bson.M{"shop_id": shopID}
+	}
+	cursor, err := r.collection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}

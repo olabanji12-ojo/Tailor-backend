@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	
 	"bytes"
 	"context"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+
 )
 
 func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +104,8 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	measurements, err := h.measurementRepo.GetAll(ctx)
+	shopID := r.Header.Get("X-Shop-ID")
+	measurements, err := h.measurementRepo.GetAll(ctx, shopID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -133,6 +136,9 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 			Data:         m.Data,
 			Transcript:   m.Transcript,
 			Unit:         m.Unit,
+			ShopID:       m.ShopID,
+			StylePhotos:  m.StylePhotos,
+			ClothPhotos:  m.ClothPhotos,
 		})
 	}
 
@@ -175,10 +181,13 @@ func (h *Handler) SaveMeasurement(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Save Measurement
 	measurement := &models.Measurement{
-		CustomerID: customer.ID,
-		Data:       req.Data,
-		Transcript: req.Transcript,
-		Unit:       req.Unit,
+		CustomerID:  customer.ID,
+		Data:        req.Data,
+		Transcript:  req.Transcript,
+		Unit:        req.Unit,
+		ShopID:      req.ShopID,
+		StylePhotos: req.StylePhotos,
+		ClothPhotos: req.ClothPhotos,
 	}
 
 	if err := h.measurementRepo.Save(ctx, measurement); err != nil {
@@ -202,13 +211,13 @@ func (h *Handler) UpdateMeasurement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data map[string]float64
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+	var updates map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		http.Error(w, "Invalid body", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.measurementRepo.Update(ctx, id, data); err != nil {
+	if err := h.measurementRepo.Update(ctx, id, updates); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -235,4 +244,23 @@ func (h *Handler) GetCustomerHistory(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(measurements)
+}
+
+func (h *Handler) DeleteMeasurement(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	params := mux.Vars(r)
+	id, err := primitive.ObjectIDFromHex(params["id"])
+	if err != nil {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.measurementRepo.Delete(ctx, id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

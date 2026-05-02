@@ -18,16 +18,24 @@ type Measurement struct {
 	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	CustomerID primitive.ObjectID `bson:"customer_id" json:"customer_id"`
 	Date       time.Time          `bson:"date" json:"date"`
-	Data       map[string]float64 `bson:"data" json:"data"`
-	Transcript string             `bson:"transcript" json:"transcript"`
-	Unit       string             `bson:"unit" json:"unit"` // "in" or "cm"
+	Data       map[string]float64 `json:"data" bson:"data"`
+	Transcript string             `json:"transcript" bson:"transcript"`
+	Unit       string             `json:"unit" bson:"unit"`
+	ShopID      string             `json:"shop_id,omitempty" bson:"shop_id,omitempty"`
+	StylePhotos []string           `json:"style_photos,omitempty" bson:"style_photos,omitempty"`
+	ClothPhotos []string           `json:"cloth_photos,omitempty" bson:"cloth_photos,omitempty"`
+	CreatedAt  time.Time          `json:"created_at" bson:"created_at"`
 }
 
 type MeasurementRequest struct {
+	CustomerID   string             `json:"customer_id"`
 	CustomerName string             `json:"customer_name"`
 	Data         map[string]float64 `json:"data"`
 	Transcript   string             `json:"transcript"`
 	Unit         string             `json:"unit"`
+	ShopID       string             `json:"shop_id"`
+	StylePhotos  []string           `json:"style_photos"`
+	ClothPhotos  []string           `json:"cloth_photos"`
 }
 
 type MeasurementResponse struct {
@@ -38,4 +46,7 @@ type MeasurementResponse struct {
 	Data         map[string]float64 `json:"data"`
 	Transcript   string             `json:"transcript"`
 	Unit         string             `json:"unit"`
+	ShopID       string             `json:"shop_id,omitempty"`
+	StylePhotos  []string           `json:"style_photos,omitempty"`
+	ClothPhotos  []string           `json:"cloth_photos,omitempty"`
 }

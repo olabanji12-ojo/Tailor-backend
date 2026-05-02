@@ -17,8 +17,18 @@ import (
 
 func main() {
 	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using default environment variables")
+	// Try to find .env in current, parent or grandparent directory
+	paths := []string{".env", "../.env", "../../.env"}
+	envLoaded := false
+	for _, p := range paths {
+		if err := godotenv.Load(p); err == nil {
+			log.Printf("✅ Loaded environment from: %s", p)
+			envLoaded = true
+			break
+		}
+	}
+	if !envLoaded {
+		log.Println("⚠️ No .env file found, using default environment variables")
 	}
 
 	// Connect to Database

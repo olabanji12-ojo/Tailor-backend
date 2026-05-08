@@ -37,9 +37,10 @@ func main() {
 	// Initialize Repositories
 	customerRepo := repository.NewCustomerRepository()
 	measurementRepo := repository.NewMeasurementRepository()
+	userRepo := repository.NewUserRepository()
 
 	// Initialize Handler
-	h := handlers.NewHandler(customerRepo, measurementRepo)
+	h := handlers.NewHandler(customerRepo, measurementRepo, userRepo)
 
 	// Initialize Router
 	r := mux.NewRouter()
@@ -49,7 +50,7 @@ func main() {
 
 	// CORS Handling
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173", "http://localhost:5174", "https://tailor-measurment.vercel.app"}, // Added production frontend
+		AllowedOrigins:   []string{"http://localhost:5173", "http://localhost:5174", "https://tailor-measurment.vercel.app", "https://tailor-measurment.vercel.app/"}, // Added production frontend
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization", "X-Shop-ID"},
 		AllowCredentials: true,

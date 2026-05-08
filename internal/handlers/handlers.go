@@ -9,10 +9,12 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/emman/Tailor-Backend/internal/models"
 	"github.com/emman/Tailor-Backend/internal/repository"
+	"github.com/emman/Tailor-Backend/internal/middleware"
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -77,12 +79,14 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 type Handler struct {
 	customerRepo    *repository.CustomerRepository
 	measurementRepo *repository.MeasurementRepository
+	userRepo        *repository.UserRepository
 }
 
-func NewHandler(cRepo *repository.CustomerRepository, mRepo *repository.MeasurementRepository) *Handler {
+func NewHandler(cRepo *repository.CustomerRepository, mRepo *repository.MeasurementRepository, uRepo *repository.UserRepository) *Handler {
 	return &Handler{
 		customerRepo:    cRepo,
 		measurementRepo: mRepo,
+		userRepo:        uRepo,
 	}
 }
 
@@ -90,7 +94,8 @@ func (h *Handler) GetCustomers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	customers, err := h.customerRepo.GetAll(ctx)
+	authCtx, _ := middleware.GetAuthContext(r)
+	customers, err := h.customerRepo.GetAll(ctx, authCtx.ShopName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -104,16 +109,25 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	shopID := r.Header.Get("X-Shop-ID")
-	measurements, err := h.measurementRepo.GetAll(ctx, shopID)
+	authCtx, _ := middleware.GetAuthContext(r)
+	shopID := authCtx.ShopName
+	
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+	page, _ := strconv.ParseInt(pageStr, 10, 64)
+	limit, _ := strconv.ParseInt(limitStr, 10, 64)
+
+	if page < 1 { page = 1 }
+	if limit < 1 { limit = 20 }
+	offset := (page - 1) * limit
+
+	measurements, total, err := h.measurementRepo.GetAll(ctx, shopID, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// For MVP, we'll manually join customer names
-	// In production, use MongoDB $lookup
-	var response []models.MeasurementResponse
+	var responseData []models.MeasurementResponse
 	customerMap := make(map[primitive.ObjectID]string)
 
 	for _, m := range measurements {
@@ -128,7 +142,7 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		response = append(response, models.MeasurementResponse{
+		responseData = append(responseData, models.MeasurementResponse{
 			ID:           m.ID,
 			CustomerID:   m.CustomerID,
 			CustomerName: name,
@@ -139,11 +153,22 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 			ShopID:       m.ShopID,
 			StylePhotos:  m.StylePhotos,
 			ClothPhotos:  m.ClothPhotos,
+			Gender:       m.Gender,
+			Garment:      m.Garment,
+			DeliveryDate: m.DeliveryDate,
+			TotalCost:    m.TotalCost,
+			AmountPaid:   m.AmountPaid,
+			DesignNotes:  m.DesignNotes,
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data":  responseData,
+		"total": total,
+		"page":  page,
+		"limit": limit,
+	})
 }
 
 func (h *Handler) SaveMeasurement(w http.ResponseWriter, r *http.Request) {
@@ -161,13 +186,17 @@ func (h *Handler) SaveMeasurement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	authCtx, _ := middleware.GetAuthContext(r)
+	shopID := authCtx.ShopName
+
 	// 1. Find or Create Customer
-	customer, err := h.customerRepo.FindByName(ctx, req.CustomerName)
+	customer, err := h.customerRepo.FindByName(ctx, req.CustomerName, shopID)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// Create new customer
 			customer = &models.Customer{
 				Name: req.CustomerName,
+				ShopID: shopID,
 			}
 			if err := h.customerRepo.Create(ctx, customer); err != nil {
 				http.Error(w, "Failed to create customer", http.StatusInternalServerError)
@@ -181,13 +210,20 @@ func (h *Handler) SaveMeasurement(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Save Measurement
 	measurement := &models.Measurement{
-		CustomerID:  customer.ID,
-		Data:        req.Data,
-		Transcript:  req.Transcript,
-		Unit:        req.Unit,
-		ShopID:      req.ShopID,
-		StylePhotos: req.StylePhotos,
-		ClothPhotos: req.ClothPhotos,
+		CustomerID:   customer.ID,
+		Date:         time.Now(),
+		Data:         req.Data,
+		Transcript:   req.Transcript,
+		Unit:         req.Unit,
+		ShopID:       req.ShopID,
+		StylePhotos:  req.StylePhotos,
+		ClothPhotos:  req.ClothPhotos,
+		Gender:       req.Gender,
+		Garment:      req.Garment,
+		DeliveryDate: req.DeliveryDate,
+		TotalCost:    req.TotalCost,
+		AmountPaid:   req.AmountPaid,
+		DesignNotes:  req.DesignNotes,
 	}
 
 	if err := h.measurementRepo.Save(ctx, measurement); err != nil {

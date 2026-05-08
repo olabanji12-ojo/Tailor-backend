@@ -31,9 +31,9 @@ func (r *CustomerRepository) Create(ctx context.Context, customer *models.Custom
 	return nil
 }
 
-func (r *CustomerRepository) FindByName(ctx context.Context, name string) (*models.Customer, error) {
+func (r *CustomerRepository) FindByName(ctx context.Context, name string, shopID string) (*models.Customer, error) {
 	var customer models.Customer
-	err := r.collection.FindOne(ctx, bson.M{"name": name}).Decode(&customer)
+	err := r.collection.FindOne(ctx, bson.M{"name": name, "shop_id": shopID}).Decode(&customer)
 	if err != nil {
 		return nil, err
 	}
@@ -49,8 +49,8 @@ func (r *CustomerRepository) FindByID(ctx context.Context, id primitive.ObjectID
 	return &customer, nil
 }
 
-func (r *CustomerRepository) GetAll(ctx context.Context) ([]models.Customer, error) {
-	cursor, err := r.collection.Find(ctx, bson.M{})
+func (r *CustomerRepository) GetAll(ctx context.Context, shopID string) ([]models.Customer, error) {
+	cursor, err := r.collection.Find(ctx, bson.M{"shop_id": shopID})
 	if err != nil {
 		return nil, err
 	}

@@ -42,23 +42,31 @@ func (r *MeasurementRepository) Delete(ctx context.Context, id primitive.ObjectI
 	return err
 }
 
-func (r *MeasurementRepository) GetAll(ctx context.Context, shopID string) ([]models.Measurement, error) {
+func (r *MeasurementRepository) GetAll(ctx context.Context, shopID string, limit, offset int64) ([]models.Measurement, int64, error) {
 	opts := options.Find().SetSort(bson.M{"date": -1})
+	if limit > 0 {
+		opts.SetLimit(limit)
+		opts.SetSkip(offset)
+	}
+
 	filter := bson.M{}
 	if shopID != "" {
 		filter = bson.M{"shop_id": shopID}
 	}
+
+	total, _ := r.collection.CountDocuments(ctx, filter)
+
 	cursor, err := r.collection.Find(ctx, filter, opts)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer cursor.Close(ctx)
 
 	var measurements []models.Measurement
 	if err := cursor.All(ctx, &measurements); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return measurements, nil
+	return measurements, total, nil
 }
 
 func (r *MeasurementRepository) GetByCustomerID(ctx context.Context, customerID primitive.ObjectID) ([]models.Measurement, error) {

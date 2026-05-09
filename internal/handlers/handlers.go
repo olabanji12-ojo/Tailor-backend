@@ -52,6 +52,7 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	}
 	io.Copy(part, file)
 	writer.WriteField("model", "whisper-1")
+	writer.WriteField("prompt", "The speaker is a professional tailor recording body measurements (e.g., Waist, Shoulder, Chest, Hip, Sleeve, Inseam). Focus on capturing names of body parts followed by numerical values. Ignore background music and noise.")
 	writer.Close()
 
 	req, err := http.NewRequest("POST", "https://api.openai.com/v1/audio/transcriptions", body)

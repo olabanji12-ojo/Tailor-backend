@@ -9,18 +9,22 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 )
 
-var jwtSecret = []byte(os.Getenv("JWT_SECRET"))
+func getJWTSecret() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		return []byte("tailor_secret_key_change_in_prod")
+	}
+	return []byte(secret)
+}
+
+var jwtSecret = getJWTSecret()
 
 func GenerateToken(userID, email, shopName string) (string, error) {
-	if len(jwtSecret) == 0 {
-		jwtSecret = []byte("tailor_secret_key_change_in_prod") // Default for dev
-	}
-
 	claims := jwt.MapClaims{
 		"user_id":   userID,
 		"email":     email,
 		"shop_name": shopName,
-		"exp":       time.Now().Add(24 * time.Hour).Unix(),
+		"exp":       time.Now().Add(7 * 24 * time.Hour).Unix(), // 7 days
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -28,10 +32,6 @@ func GenerateToken(userID, email, shopName string) (string, error) {
 }
 
 func ValidateToken(tokenString string) (*jwt.Token, jwt.MapClaims, error) {
-	if len(jwtSecret) == 0 {
-		jwtSecret = []byte("tailor_secret_key_change_in_prod")
-	}
-
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("unexpected signing method")

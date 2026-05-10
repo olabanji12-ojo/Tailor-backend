@@ -31,6 +31,7 @@ type Measurement struct {
 	TotalCost    float64            `json:"total_cost,omitempty" bson:"total_cost,omitempty"`
 	AmountPaid   float64            `json:"amount_paid,omitempty" bson:"amount_paid,omitempty"`
 	DesignNotes  string             `json:"design_notes,omitempty" bson:"design_notes,omitempty"`
+	ClientPhoto  string             `json:"client_photo,omitempty" bson:"client_photo,omitempty"`
 	CreatedAt    time.Time          `json:"created_at" bson:"created_at"`
 }
 
@@ -49,6 +50,7 @@ type MeasurementRequest struct {
 	TotalCost    float64            `json:"total_cost"`
 	AmountPaid   float64            `json:"amount_paid"`
 	DesignNotes  string             `json:"design_notes"`
+	ClientPhoto  string             `json:"client_photo"`
 }
 
 type MeasurementResponse struct {
@@ -68,6 +70,7 @@ type MeasurementResponse struct {
 	TotalCost    float64            `json:"total_cost,omitempty"`
 	AmountPaid   float64            `json:"amount_paid,omitempty"`
 	DesignNotes  string             `json:"design_notes,omitempty"`
+	ClientPhoto  string             `json:"client_photo,omitempty"`
 }
 type User struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`

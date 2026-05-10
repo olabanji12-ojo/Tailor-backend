@@ -160,6 +160,7 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 			TotalCost:    m.TotalCost,
 			AmountPaid:   m.AmountPaid,
 			DesignNotes:  m.DesignNotes,
+			ClientPhoto:  m.ClientPhoto,
 		})
 	}
 
@@ -225,6 +226,7 @@ func (h *Handler) SaveMeasurement(w http.ResponseWriter, r *http.Request) {
 		TotalCost:    req.TotalCost,
 		AmountPaid:   req.AmountPaid,
 		DesignNotes:  req.DesignNotes,
+		ClientPhoto:  req.ClientPhoto,
 	}
 
 	if err := h.measurementRepo.Save(ctx, measurement); err != nil {

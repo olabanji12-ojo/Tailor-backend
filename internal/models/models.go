@@ -28,6 +28,7 @@ type Measurement struct {
 	Gender       string             `json:"gender,omitempty" bson:"gender,omitempty"`
 	Garment      string             `json:"garment,omitempty" bson:"garment,omitempty"`
 	DeliveryDate string             `json:"delivery_date,omitempty" bson:"delivery_date,omitempty"`
+	ReminderDate string             `json:"reminder_date,omitempty" bson:"reminder_date,omitempty"`
 	TotalCost    float64            `json:"total_cost,omitempty" bson:"total_cost,omitempty"`
 	AmountPaid   float64            `json:"amount_paid,omitempty" bson:"amount_paid,omitempty"`
 	DesignNotes  string             `json:"design_notes,omitempty" bson:"design_notes,omitempty"`
@@ -47,6 +48,7 @@ type MeasurementRequest struct {
 	Gender       string             `json:"gender"`
 	Garment      string             `json:"garment"`
 	DeliveryDate string             `json:"delivery_date"`
+	ReminderDate string             `json:"reminder_date"`
 	TotalCost    float64            `json:"total_cost"`
 	AmountPaid   float64            `json:"amount_paid"`
 	DesignNotes  string             `json:"design_notes"`
@@ -67,6 +69,7 @@ type MeasurementResponse struct {
 	Gender       string             `json:"gender,omitempty"`
 	Garment      string             `json:"garment,omitempty"`
 	DeliveryDate string             `json:"delivery_date,omitempty"`
+	ReminderDate string             `json:"reminder_date,omitempty"`
 	TotalCost    float64            `json:"total_cost,omitempty"`
 	AmountPaid   float64            `json:"amount_paid,omitempty"`
 	DesignNotes  string             `json:"design_notes,omitempty"`

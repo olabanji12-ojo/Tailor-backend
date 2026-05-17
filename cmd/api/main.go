@@ -33,6 +33,7 @@ func main() {
 
 	// Connect to Database
 	database.ConnectDB()
+	database.ConnectRedis()
 
 	// Initialize Repositories
 	customerRepo := repository.NewCustomerRepository()

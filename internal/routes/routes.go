@@ -33,4 +33,6 @@ func RegisterRoutes(r *mux.Router, h *handlers.Handler) {
 	protected.HandleFunc("/measurements/{id}", h.DeleteMeasurement).Methods("DELETE")
 	protected.HandleFunc("/customers/{id}/measurements", h.GetCustomerHistory).Methods("GET")
 	protected.HandleFunc("/transcribe", h.Transcribe).Methods("POST")
+	protected.HandleFunc("/admin/diagnostics", h.GetDiagnostics).Methods("GET")
+	protected.HandleFunc("/parse-voice", h.ParseVoice).Methods("POST")
 }

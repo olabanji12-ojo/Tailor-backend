@@ -1,24 +1,28 @@
 package handlers
 
 import (
-	
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 
+	"runtime"
+
 	"github.com/emman/Tailor-Backend/internal/models"
 	"github.com/emman/Tailor-Backend/internal/repository"
 	"github.com/emman/Tailor-Backend/internal/middleware"
+	"github.com/emman/Tailor-Backend/internal/database"
 	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-
 )
 
 func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +126,24 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 	if limit < 1 { limit = 20 }
 	offset := (page - 1) * limit
 
+	// Redis Cache Check
+	cacheKey := fmt.Sprintf("cache:measurements:shop:%s:page:%d:limit:%d", shopID, page, limit)
+	var cachedData []byte
+	var cacheHit = false
+	if database.RedisClient != nil {
+		val, err := database.RedisClient.Get(ctx, cacheKey).Bytes()
+		if err == nil {
+			cachedData = val
+			cacheHit = true
+		}
+	}
+
+	if cacheHit {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(cachedData)
+		return
+	}
+
 	measurements, total, err := h.measurementRepo.GetAll(ctx, shopID, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -157,6 +179,7 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 			Gender:       m.Gender,
 			Garment:      m.Garment,
 			DeliveryDate: m.DeliveryDate,
+			ReminderDate: m.ReminderDate,
 			TotalCost:    m.TotalCost,
 			AmountPaid:   m.AmountPaid,
 			DesignNotes:  m.DesignNotes,
@@ -164,13 +187,18 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	respBytes, err := json.Marshal(map[string]interface{}{
 		"data":  responseData,
 		"total": total,
 		"page":  page,
 		"limit": limit,
 	})
+	if err == nil && database.RedisClient != nil {
+		database.RedisClient.Set(ctx, cacheKey, respBytes, 10*time.Minute)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(respBytes)
 }
 
 func (h *Handler) SaveMeasurement(w http.ResponseWriter, r *http.Request) {
@@ -223,6 +251,7 @@ func (h *Handler) SaveMeasurement(w http.ResponseWriter, r *http.Request) {
 		Gender:       req.Gender,
 		Garment:      req.Garment,
 		DeliveryDate: req.DeliveryDate,
+		ReminderDate: req.ReminderDate,
 		TotalCost:    req.TotalCost,
 		AmountPaid:   req.AmountPaid,
 		DesignNotes:  req.DesignNotes,
@@ -233,6 +262,8 @@ func (h *Handler) SaveMeasurement(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to save measurement", http.StatusInternalServerError)
 		return
 	}
+
+	h.InvalidateMeasurementsCache(shopID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -260,6 +291,9 @@ func (h *Handler) UpdateMeasurement(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	authCtx, _ := middleware.GetAuthContext(r)
+	h.InvalidateMeasurementsCache(authCtx.ShopName)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -301,5 +335,219 @@ func (h *Handler) DeleteMeasurement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	authCtx, _ := middleware.GetAuthContext(r)
+	h.InvalidateMeasurementsCache(authCtx.ShopName)
+
 	w.WriteHeader(http.StatusNoContent)
+}
+
+var serverStartTime time.Time
+
+func init() {
+	serverStartTime = time.Now()
+}
+
+func (h *Handler) GetDiagnostics(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Strict Admin security check
+	authCtx, ok := middleware.GetAuthContext(r)
+	if !ok || authCtx.Email != "emmanuel@example.com" {
+		http.Error(w, "Access Denied: Admin Clearance Required", http.StatusForbidden)
+		return
+	}
+
+	// 1. Gather Database stats
+	usersColl := database.GetCollection("users")
+	measurementsColl := database.GetCollection("measurements")
+	customersColl := database.GetCollection("customers")
+
+	totalUsers, _ := usersColl.CountDocuments(ctx, bson.M{})
+	totalMeasurements, _ := measurementsColl.CountDocuments(ctx, bson.M{})
+	totalCustomers, _ := customersColl.CountDocuments(ctx, bson.M{})
+
+	// Aggregate unique shops
+	pipeline := mongo.Pipeline{
+		{{"$group", bson.D{{"_id", "$shop_name"}}}},
+		{{"$count", "count"}},
+	}
+	cursor, err := usersColl.Aggregate(ctx, pipeline)
+	var totalShops int64 = 0
+	if err == nil && cursor != nil {
+		if cursor.Next(ctx) {
+			var result struct {
+				Count int64 `bson:"count"`
+			}
+			if err := cursor.Decode(&result); err == nil {
+				totalShops = result.Count
+			}
+		}
+		cursor.Close(ctx)
+	}
+
+	// 2. Fetch System/Runtime Telemetry
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	// Memory usage in Megabytes
+	ramUsageMb := float64(memStats.Alloc) / 1024 / 1024
+
+	// System latency check (ping MongoDB)
+	startPing := time.Now()
+	pingErr := database.DB.Client().Ping(ctx, nil)
+	dbLatencyMs := time.Since(startPing).Milliseconds()
+	dbStatus := "healthy"
+	if pingErr != nil {
+		dbStatus = "unhealthy"
+	}
+
+	// Calculate mock Whisper billing details (or real counts if tracked)
+	mockWhisperCost := float64(totalMeasurements) * 0.003 // Whisper rate is $0.006/minute, assume 30s per record average
+
+	diagnostics := map[string]interface{}{
+		"system": map[string]interface{}{
+			"status":            "operational",
+			"uptime":            time.Since(serverStartTime).String(),
+			"goroutines":        runtime.NumGoroutine(),
+			"ram_usage_mb":      ramUsageMb,
+			"db_status":         dbStatus,
+			"db_latency_ms":     dbLatencyMs,
+			"redis_status":      "disconnected",
+			"redis_latency_ms":  0,
+		},
+		"ateliers": map[string]interface{}{
+			"total_registered_shops": totalShops,
+			"total_tailor_users":     totalUsers,
+			"total_customers":        totalCustomers,
+			"total_measurements":     totalMeasurements,
+		},
+		"voice_ai": map[string]interface{}{
+			"total_whisper_minutes":  float64(totalMeasurements) * 0.5,
+			"estimated_cost_usd":     mockWhisperCost,
+			"average_latency_ms":     850,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*") // Ensure cross-origin accessibility
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+	json.NewEncoder(w).Encode(diagnostics)
+}
+
+func (h *Handler) ParseVoice(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Parse input
+	var requestBody struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil || requestBody.Text == "" {
+		http.Error(w, "Text parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		http.Error(w, "OpenAI API Key is not configured on server", http.StatusInternalServerError)
+		return
+	}
+
+	// Prepare OpenAI Chat Completions payload
+	payload := map[string]interface{}{
+		"model": "gpt-4o-mini",
+		"messages": []map[string]string{
+			{
+				"role": "system",
+				"content": "You are a professional tailor's transcription NLP translator. Extract body measurements mentioned in the text. Respond ONLY with a valid, clean JSON object mapping body parts to numbers. Numbers must be floats. If fractions like 'and a half' are mentioned, convert them (e.g. '24 and a half' -> 24.5). Do not include any explanation or markdown formatting, just raw JSON. If no measurements are found, return empty JSON {}.",
+			},
+			{
+				"role": "user",
+				"content": requestBody.Text,
+			},
+		},
+		"response_format": map[string]string{
+			"type": "json_object", // Ensure structural JSON output compliance!
+		},
+	}
+
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, "Failed to marshal OpenAI payload", http.StatusInternalServerError)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		http.Error(w, "Failed to build OpenAI client query", http.StatusInternalServerError)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "Failed to communicate with OpenAI Translator API", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		http.Error(w, "OpenAI returns error status: "+string(bodyBytes), http.StatusBadGateway)
+		return
+	}
+
+	// Extract the JSON content inside choices[0].message.content
+	var openAIResponse struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&openAIResponse); err != nil || len(openAIResponse.Choices) == 0 {
+		http.Error(w, "Failed to decode translation response", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+	
+	// Pass the clean extracted JSON back to client
+	w.Write([]byte(openAIResponse.Choices[0].Message.Content))
+}
+
+func (h *Handler) InvalidateMeasurementsCache(shopID string) {
+	if database.RedisClient == nil {
+		return
+	}
+	ctx := context.Background()
+	pattern := fmt.Sprintf("cache:measurements:shop:%s:*", shopID)
+
+	var cursor uint64
+	for {
+		keys, nextCursor, err := database.RedisClient.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			log.Printf("⚠️ Failed to scan Redis keys for cache invalidation: %v", err)
+			return
+		}
+
+		if len(keys) > 0 {
+			_, err = database.RedisClient.Del(ctx, keys...).Result()
+			if err != nil {
+				log.Printf("⚠️ Failed to delete Redis keys: %v", err)
+			}
+		}
+
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
 }

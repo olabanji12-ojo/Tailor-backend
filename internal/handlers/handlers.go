@@ -402,6 +402,20 @@ func (h *Handler) GetDiagnostics(w http.ResponseWriter, r *http.Request) {
 		dbStatus = "unhealthy"
 	}
 
+	// Dynamic Redis telemetry check
+	redisStatus := "disconnected"
+	var redisLatencyMs int64 = 0
+	if database.RedisClient != nil {
+		startRedisPing := time.Now()
+		redisPingErr := database.RedisClient.Ping(ctx).Err()
+		redisLatencyMs = time.Since(startRedisPing).Milliseconds()
+		if redisPingErr == nil {
+			redisStatus = "healthy"
+		} else {
+			redisStatus = "unhealthy"
+		}
+	}
+
 	// Calculate mock Whisper billing details (or real counts if tracked)
 	mockWhisperCost := float64(totalMeasurements) * 0.003 // Whisper rate is $0.006/minute, assume 30s per record average
 
@@ -413,8 +427,8 @@ func (h *Handler) GetDiagnostics(w http.ResponseWriter, r *http.Request) {
 			"ram_usage_mb":      ramUsageMb,
 			"db_status":         dbStatus,
 			"db_latency_ms":     dbLatencyMs,
-			"redis_status":      "disconnected",
-			"redis_latency_ms":  0,
+			"redis_status":      redisStatus,
+			"redis_latency_ms":  redisLatencyMs,
 		},
 		"ateliers": map[string]interface{}{
 			"total_registered_shops": totalShops,

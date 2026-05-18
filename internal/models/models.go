@@ -99,3 +99,19 @@ type AuthResponse struct {
 	Token    string `json:"token"`
 	User     User   `json:"user"`
 }
+
+// VoiceEvent is an immutable receipt for every transcription attempt.
+// Implements Event Sourcing — Redis holds the fast counter,
+// MongoDB holds the truth. One document = one recording attempt.
+type VoiceEvent struct {
+	ID               primitive.ObjectID `bson:"_id,omitempty"          json:"id,omitempty"`
+	ShopID           string             `bson:"shop_id"                json:"shop_id"`
+	Timestamp        time.Time          `bson:"timestamp"              json:"timestamp"`
+	FileSizeBytes    int64              `bson:"file_size_bytes"        json:"file_size_bytes"`
+	EstimatedSeconds int64              `bson:"estimated_seconds"      json:"estimated_seconds"`
+	ActualSeconds    int64              `bson:"actual_seconds"         json:"actual_seconds"`
+	// Outcome: "success" | "timeout" | "empty" | "quota_exceeded" | "unavailable"
+	Outcome     string `bson:"outcome"      json:"outcome"`
+	QuotaBefore int64  `bson:"quota_before" json:"quota_before"`
+	QuotaAfter  int64  `bson:"quota_after"  json:"quota_after"`
+}

@@ -36,8 +36,31 @@ func nextMonthReset() string {
 	return first.Format("January 2, 2006")
 }
 
+// logVoiceEvent writes an immutable receipt to MongoDB voice_events — fire and forget.
+// Pattern: Event Sourcing. Redis = fast counter. MongoDB = source of truth for disputes.
+func logVoiceEvent(shopID string, fileBytes, estimated, actual, quotaBefore, quotaAfter int64, outcome string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		event := models.VoiceEvent{
+			ID:               primitive.NewObjectID(),
+			ShopID:           shopID,
+			Timestamp:        time.Now(),
+			FileSizeBytes:    fileBytes,
+			EstimatedSeconds: estimated,
+			ActualSeconds:    actual,
+			Outcome:          outcome,
+			QuotaBefore:      quotaBefore,
+			QuotaAfter:       quotaAfter,
+		}
+		if _, err := database.GetCollection("voice_events").InsertOne(ctx, event); err != nil {
+			log.Printf("⚠️ voice_events log failed: %v", err)
+		}
+	}()
+}
+
 func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
-	// 0. Get auth context for quota check
+	// 0. Get auth context
 	authCtx, ok := middleware.GetAuthContext(r)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -48,36 +71,11 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	monthKey := fmt.Sprintf("voice:seconds:%s:%s", shopID, time.Now().Format("2006_01"))
 	redisCtx := context.Background()
 
-	// 1. Check voice quota before processing (skip for admins)
-	var usedSeconds int64 = 0
-	if !isAdmin && database.RedisClient != nil {
-		val, err := database.RedisClient.Get(redisCtx, monthKey).Int64()
-		if err == nil {
-			usedSeconds = val
-		}
-		if usedSeconds >= voiceQuotaSeconds {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"error": "voice_quota_exceeded",
-				"quota": map[string]interface{}{
-					"used_seconds":      usedSeconds,
-					"limit_seconds":     voiceQuotaSeconds,
-					"remaining_seconds": 0,
-					"warning_level":     "exceeded",
-					"resets_on":         nextMonthReset(),
-				},
-			})
-			return
-		}
-	}
-
-	// 2. Parse multipart form
+	// 1. Parse multipart form + get file FIRST (we need file size before any quota logic)
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		http.Error(w, "File too large", http.StatusBadRequest)
 		return
 	}
-
 	file, header, err := r.FormFile("audio")
 	if err != nil {
 		http.Error(w, "Audio file is required", http.StatusBadRequest)
@@ -85,7 +83,85 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// 3. Build OpenAI Whisper request with verbose_json for real duration
+	// 2. Estimate duration from file size — WebM Opus ~4000 bytes/sec at 32kbps
+	// Used to PRE-CHARGE the tailor before Whisper is called.
+	estimatedSeconds := int64(math.Ceil(float64(header.Size) / 4000.0))
+	if estimatedSeconds < 1 {
+		estimatedSeconds = 1
+	}
+
+	// buildQuota is a helper to produce a consistent quota response object
+	buildQuota := func(charged int64) map[string]interface{} {
+		remaining := voiceQuotaSeconds - charged
+		if remaining < 0 {
+			remaining = 0
+		}
+		level := "none"
+		if !isAdmin {
+			ratio := float64(charged) / float64(voiceQuotaSeconds)
+			switch {
+			case charged >= voiceQuotaSeconds:
+				level = "exceeded"
+			case ratio >= 0.95:
+				level = "urgent"
+			case ratio >= 0.80:
+				level = "warning"
+			}
+		}
+		return map[string]interface{}{
+			"used_seconds":      charged,
+			"limit_seconds":     voiceQuotaSeconds,
+			"remaining_seconds": remaining,
+			"warning_level":     level,
+			"resets_on":         nextMonthReset(),
+			"is_admin":          isAdmin,
+		}
+	}
+
+	// 3. Fail Closed: if Redis is unavailable and user is not admin, deny voice immediately.
+	// Pattern: Fail Secure (Twilio/Banking) — when the enforcement mechanism is down,
+	// fail to the safe state rather than letting unlimited voice through.
+	if !isAdmin && database.RedisClient == nil {
+		logVoiceEvent(shopID, header.Size, estimatedSeconds, 0, 0, 0, "unavailable")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "voice_service_unavailable",
+			"message": "Voice is temporarily unavailable. Please use the manual keypad.",
+		})
+		return
+	}
+
+	// 4. Read current usage, pre-flight check, then PRE-CHARGE (skip for admins)
+	var usedSeconds int64 = 0
+	var quotaBefore int64 = 0 // snapshot before pre-charge — used in audit log
+	if !isAdmin {
+		val, err := database.RedisClient.Get(redisCtx, monthKey).Int64()
+		if err == nil {
+			usedSeconds = val
+		}
+		quotaBefore = usedSeconds // lock in the pre-charge snapshot
+
+		// Pre-flight: would this recording push the tailor over the limit?
+		if usedSeconds+estimatedSeconds > voiceQuotaSeconds {
+			logVoiceEvent(shopID, header.Size, estimatedSeconds, 0, quotaBefore, quotaBefore, "quota_exceeded")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "voice_quota_exceeded",
+				"quota": buildQuota(usedSeconds),
+			})
+			return
+		}
+
+		// PRE-CHARGE: deduct estimated seconds the moment audio arrives at the server.
+		// This ensures Emmanuel is never absorbing Whisper costs — the tailor always pays.
+		newUsed, _ := database.RedisClient.IncrBy(redisCtx, monthKey, estimatedSeconds).Result()
+		database.RedisClient.Expire(redisCtx, monthKey, 45*24*time.Hour)
+		usedSeconds = newUsed
+	}
+
+	// 4. Build OpenAI Whisper request
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		http.Error(w, "OpenAI API Key not configured", http.StatusInternalServerError)
@@ -113,71 +189,68 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	// 4. Execute the Whisper API call
+	// 5. Execute the Whisper API call (30s backend timeout)
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, "Failed to connect to OpenAI", http.StatusInternalServerError)
+		// Whisper timed out or connection failed — pre-charge already deducted, return quota info
+		logVoiceEvent(shopID, header.Size, estimatedSeconds, 0, quotaBefore, usedSeconds, "timeout")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGatewayTimeout)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "whisper_timeout",
+			"quota": buildQuota(usedSeconds),
+		})
 		return
 	}
 	defer resp.Body.Close()
 
-	// 5. Parse Whisper verbose_json response to get text + actual duration
+	// 6. Parse Whisper verbose_json response (need text + actual duration)
 	var whisperResp struct {
 		Text     string  `json:"text"`
 		Duration float64 `json:"duration"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&whisperResp); err != nil || whisperResp.Text == "" {
+		// Empty/failed transcript — pre-charge stands (silence still costs Whisper)
+		logVoiceEvent(shopID, header.Size, estimatedSeconds, 0, quotaBefore, usedSeconds, "empty")
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Transcription failed or returned empty"})
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "transcription_empty",
+			"quota": buildQuota(usedSeconds),
+		})
 		return
 	}
 
-	// 6. Increment Redis quota counter by actual audio duration (skip for admins)
-	durationSeconds := int64(math.Ceil(whisperResp.Duration))
-	if durationSeconds < 1 {
-		durationSeconds = 1 // Minimum 1 second per call
+	// 7. Bidirectional reconciliation (Authorize-Capture pattern, Stripe-style).
+	// Actual duration always wins — delta can be negative (refund) or positive (top-up).
+	actualSeconds := int64(math.Ceil(whisperResp.Duration))
+	if actualSeconds < 1 {
+		actualSeconds = 1
 	}
-	var newUsed int64 = usedSeconds + durationSeconds
 	if !isAdmin && database.RedisClient != nil {
-		newUsed, _ = database.RedisClient.IncrBy(redisCtx, monthKey, durationSeconds).Result()
-		// Set TTL to 45 days to auto-clean old month keys
-		database.RedisClient.Expire(redisCtx, monthKey, 45*24*time.Hour)
-	}
-
-	// 7. Calculate warning level for the response
-	remaining := voiceQuotaSeconds - newUsed
-	if remaining < 0 {
-		remaining = 0
-	}
-	warningLevel := "none"
-	if !isAdmin {
-		usageRatio := float64(newUsed) / float64(voiceQuotaSeconds)
-		switch {
-		case newUsed >= voiceQuotaSeconds:
-			warningLevel = "exceeded"
-		case usageRatio >= 0.95:
-			warningLevel = "urgent"
-		case usageRatio >= 0.80:
-			warningLevel = "warning"
+		delta := actualSeconds - estimatedSeconds // signed: negative = tailor was over-estimated
+		if delta != 0 {
+			reconciled, _ := database.RedisClient.IncrBy(redisCtx, monthKey, delta).Result()
+			if reconciled < 0 {
+				// Floor guard: Redis should never go below 0
+				database.RedisClient.Set(redisCtx, monthKey, 0, 45*24*time.Hour)
+				usedSeconds = 0
+			} else {
+				usedSeconds = reconciled
+			}
 		}
 	}
 
-	// 8. Return transcript + quota metadata
+	// 8. Return transcript + final quota metadata
+	logVoiceEvent(shopID, header.Size, estimatedSeconds, actualSeconds, quotaBefore, usedSeconds, "success")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"text": whisperResp.Text,
-		"quota": map[string]interface{}{
-			"used_seconds":      newUsed,
-			"limit_seconds":     voiceQuotaSeconds,
-			"remaining_seconds": remaining,
-			"warning_level":     warningLevel,
-			"resets_on":         nextMonthReset(),
-			"is_admin":          isAdmin,
-		},
+		"text":  whisperResp.Text,
+		"quota": buildQuota(usedSeconds),
 	})
 }
+
 
 type Handler struct {
 	customerRepo    *repository.CustomerRepository

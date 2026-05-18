@@ -80,6 +80,7 @@ type User struct {
 	Email     string             `bson:"email" json:"email"`
 	Password  string             `bson:"password" json:"-"`
 	ShopName  string             `bson:"shop_name" json:"shop_name"`
+	Role      string             `bson:"role" json:"role"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }
 

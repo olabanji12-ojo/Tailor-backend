@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -25,10 +26,54 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
+// voiceQuotaSeconds is the monthly voice transcription limit per boutique (15 minutes)
+const voiceQuotaSeconds int64 = 900
+
+// nextMonthReset returns a human-friendly date string for when the quota resets
+func nextMonthReset() string {
+	now := time.Now()
+	first := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
+	return first.Format("January 2, 2006")
+}
+
 func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
-	// 1. Get the file from the request
-	err := r.ParseMultipartForm(10 << 20) // 10 MB max
-	if err != nil {
+	// 0. Get auth context for quota check
+	authCtx, ok := middleware.GetAuthContext(r)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	shopID := authCtx.UserID
+	isAdmin := authCtx.Role == "admin"
+	monthKey := fmt.Sprintf("voice:seconds:%s:%s", shopID, time.Now().Format("2006_01"))
+	redisCtx := context.Background()
+
+	// 1. Check voice quota before processing (skip for admins)
+	var usedSeconds int64 = 0
+	if !isAdmin && database.RedisClient != nil {
+		val, err := database.RedisClient.Get(redisCtx, monthKey).Int64()
+		if err == nil {
+			usedSeconds = val
+		}
+		if usedSeconds >= voiceQuotaSeconds {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "voice_quota_exceeded",
+				"quota": map[string]interface{}{
+					"used_seconds":      usedSeconds,
+					"limit_seconds":     voiceQuotaSeconds,
+					"remaining_seconds": 0,
+					"warning_level":     "exceeded",
+					"resets_on":         nextMonthReset(),
+				},
+			})
+			return
+		}
+	}
+
+	// 2. Parse multipart form
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		http.Error(w, "File too large", http.StatusBadRequest)
 		return
 	}
@@ -40,7 +85,7 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// 2. Prepare the request to OpenAI
+	// 3. Build OpenAI Whisper request with verbose_json for real duration
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		http.Error(w, "OpenAI API Key not configured", http.StatusInternalServerError)
@@ -56,6 +101,7 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	}
 	io.Copy(part, file)
 	writer.WriteField("model", "whisper-1")
+	writer.WriteField("response_format", "verbose_json")
 	writer.WriteField("prompt", "The speaker is a professional tailor recording body measurements (e.g., Waist, Shoulder, Chest, Hip, Sleeve, Inseam). Focus on capturing names of body parts followed by numerical values. Ignore background music and noise.")
 	writer.Close()
 
@@ -67,8 +113,8 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	// 3. Execute the request
-	client := &http.Client{}
+	// 4. Execute the Whisper API call
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		http.Error(w, "Failed to connect to OpenAI", http.StatusInternalServerError)
@@ -76,9 +122,61 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// 4. Proxy the response back to the client
+	// 5. Parse Whisper verbose_json response to get text + actual duration
+	var whisperResp struct {
+		Text     string  `json:"text"`
+		Duration float64 `json:"duration"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&whisperResp); err != nil || whisperResp.Text == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Transcription failed or returned empty"})
+		return
+	}
+
+	// 6. Increment Redis quota counter by actual audio duration (skip for admins)
+	durationSeconds := int64(math.Ceil(whisperResp.Duration))
+	if durationSeconds < 1 {
+		durationSeconds = 1 // Minimum 1 second per call
+	}
+	var newUsed int64 = usedSeconds + durationSeconds
+	if !isAdmin && database.RedisClient != nil {
+		newUsed, _ = database.RedisClient.IncrBy(redisCtx, monthKey, durationSeconds).Result()
+		// Set TTL to 45 days to auto-clean old month keys
+		database.RedisClient.Expire(redisCtx, monthKey, 45*24*time.Hour)
+	}
+
+	// 7. Calculate warning level for the response
+	remaining := voiceQuotaSeconds - newUsed
+	if remaining < 0 {
+		remaining = 0
+	}
+	warningLevel := "none"
+	if !isAdmin {
+		usageRatio := float64(newUsed) / float64(voiceQuotaSeconds)
+		switch {
+		case newUsed >= voiceQuotaSeconds:
+			warningLevel = "exceeded"
+		case usageRatio >= 0.95:
+			warningLevel = "urgent"
+		case usageRatio >= 0.80:
+			warningLevel = "warning"
+		}
+	}
+
+	// 8. Return transcript + quota metadata
 	w.Header().Set("Content-Type", "application/json")
-	io.Copy(w, resp.Body)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"text": whisperResp.Text,
+		"quota": map[string]interface{}{
+			"used_seconds":      newUsed,
+			"limit_seconds":     voiceQuotaSeconds,
+			"remaining_seconds": remaining,
+			"warning_level":     warningLevel,
+			"resets_on":         nextMonthReset(),
+			"is_admin":          isAdmin,
+		},
+	})
 }
 
 type Handler struct {
@@ -351,9 +449,9 @@ func (h *Handler) GetDiagnostics(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Strict Admin security check
+	// Strict role-based admin check
 	authCtx, ok := middleware.GetAuthContext(r)
-	if !ok || authCtx.Email != "emmanuel@example.com" {
+	if !ok || authCtx.Role != "admin" {
 		http.Error(w, "Access Denied: Admin Clearance Required", http.StatusForbidden)
 		return
 	}
@@ -567,9 +665,9 @@ func (h *Handler) InvalidateMeasurementsCache(shopID string) {
 }
 
 func (h *Handler) TriggerBackup(w http.ResponseWriter, r *http.Request) {
-	// Strict admin guard check
-	authCtx, _ := middleware.GetAuthContext(r)
-	if authCtx.Email != "emmanuel@example.com" {
+	// Role-based admin guard
+	authCtx, ok := middleware.GetAuthContext(r)
+	if !ok || authCtx.Role != "admin" {
 		http.Error(w, "Access Forbidden: Administrative credentials required", http.StatusForbidden)
 		return
 	}

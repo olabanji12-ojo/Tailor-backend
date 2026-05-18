@@ -19,11 +19,12 @@ func getJWTSecret() []byte {
 
 var jwtSecret = getJWTSecret()
 
-func GenerateToken(userID, email, shopName string) (string, error) {
+func GenerateToken(userID, email, shopName, role string) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id":   userID,
 		"email":     email,
 		"shop_name": shopName,
+		"role":      role,
 		"exp":       time.Now().Add(7 * 24 * time.Hour).Unix(), // 7 days
 	}
 

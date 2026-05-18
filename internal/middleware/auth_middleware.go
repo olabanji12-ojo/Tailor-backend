@@ -12,6 +12,7 @@ type AuthContext struct {
 	UserID   string
 	Email    string
 	ShopName string
+	Role     string
 }
 
 type contextKey string
@@ -45,11 +46,18 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		userID, _ := claims["user_id"].(string)
 		email, _ := claims["email"].(string)
 		shopName, _ := claims["shop_name"].(string)
+		role, _ := claims["role"].(string)
+
+		// Default legacy tokens (before role was added) to tailor_free
+		if role == "" {
+			role = "tailor_free"
+		}
 
 		authCtx := AuthContext{
 			UserID:   userID,
 			Email:    email,
 			ShopName: shopName,
+			Role:     role,
 		}
 
 		ctx := context.WithValue(r.Context(), authKey, authCtx)

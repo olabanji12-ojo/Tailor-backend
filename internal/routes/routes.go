@@ -21,6 +21,7 @@ func RegisterRoutes(r *mux.Router, h *handlers.Handler) {
 	// Public Auth Routes
 	api.HandleFunc("/signup", h.Signup).Methods("POST")
 	api.HandleFunc("/login", h.Login).Methods("POST")
+	api.HandleFunc("/admin/create-account", h.AdminCreateAccount).Methods("POST")
 
 	// Protected Routes (Require Token)
 	protected := api.PathPrefix("").Subrouter()

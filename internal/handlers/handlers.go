@@ -369,8 +369,8 @@ func (h *Handler) GetDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// Aggregate unique shops
 	pipeline := mongo.Pipeline{
-		{{"$group", bson.D{{"_id", "$shop_name"}}}},
-		{{"$count", "count"}},
+		bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$shop_name"}}}},
+		bson.D{{Key: "$count", Value: "count"}},
 	}
 	cursor, err := usersColl.Aggregate(ctx, pipeline)
 	var totalShops int64 = 0
@@ -550,4 +550,27 @@ func (h *Handler) InvalidateMeasurementsCache(shopID string) {
 			break
 		}
 	}
+}
+
+func (h *Handler) TriggerBackup(w http.ResponseWriter, r *http.Request) {
+	// Strict admin guard check
+	authCtx, _ := middleware.GetAuthContext(r)
+	if authCtx.Email != "emmanuel@example.com" {
+		http.Error(w, "Access Forbidden: Administrative credentials required", http.StatusForbidden)
+		return
+	}
+
+	// Execute manual backup
+	err := database.RunBackupJob()
+	if err != nil {
+		http.Error(w, "Failed to execute database backup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "Database backup successfully generated and archived in private GitHub repository",
+	})
 }

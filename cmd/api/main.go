@@ -34,6 +34,7 @@ func main() {
 	// Connect to Database
 	database.ConnectDB()
 	database.ConnectRedis()
+	database.StartBackupScheduler()
 
 	// Initialize Repositories
 	customerRepo := repository.NewCustomerRepository()

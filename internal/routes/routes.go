@@ -34,5 +34,6 @@ func RegisterRoutes(r *mux.Router, h *handlers.Handler) {
 	protected.HandleFunc("/customers/{id}/measurements", h.GetCustomerHistory).Methods("GET")
 	protected.HandleFunc("/transcribe", h.Transcribe).Methods("POST")
 	protected.HandleFunc("/admin/diagnostics", h.GetDiagnostics).Methods("GET")
+	protected.HandleFunc("/admin/backup", h.TriggerBackup).Methods("POST")
 	protected.HandleFunc("/parse-voice", h.ParseVoice).Methods("POST")
 }

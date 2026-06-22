@@ -26,8 +26,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// voiceQuotaSeconds is the monthly voice transcription limit per boutique (10 minutes)
-const voiceQuotaSeconds int64 = 600
+// voiceQuotaSeconds is the monthly voice transcription limit per boutique (8 minutes)
+const voiceQuotaSeconds int64 = 480
 
 // nextMonthReset returns a human-friendly date string for when the quota resets
 func nextMonthReset() string {

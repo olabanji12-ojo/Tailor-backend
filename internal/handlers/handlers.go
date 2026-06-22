@@ -16,10 +16,10 @@ import (
 
 	"runtime"
 
+	"github.com/emman/Tailor-Backend/internal/database"
+	"github.com/emman/Tailor-Backend/internal/middleware"
 	"github.com/emman/Tailor-Backend/internal/models"
 	"github.com/emman/Tailor-Backend/internal/repository"
-	"github.com/emman/Tailor-Backend/internal/middleware"
-	"github.com/emman/Tailor-Backend/internal/database"
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -251,7 +251,6 @@ func (h *Handler) Transcribe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-
 type Handler struct {
 	customerRepo    *repository.CustomerRepository
 	measurementRepo *repository.MeasurementRepository
@@ -287,14 +286,18 @@ func (h *Handler) GetMeasurements(w http.ResponseWriter, r *http.Request) {
 
 	authCtx, _ := middleware.GetAuthContext(r)
 	shopID := authCtx.ShopName
-	
+
 	pageStr := r.URL.Query().Get("page")
 	limitStr := r.URL.Query().Get("limit")
 	page, _ := strconv.ParseInt(pageStr, 10, 64)
 	limit, _ := strconv.ParseInt(limitStr, 10, 64)
 
-	if page < 1 { page = 1 }
-	if limit < 1 { limit = 20 }
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
 	offset := (page - 1) * limit
 
 	// Redis Cache Check
@@ -396,7 +399,7 @@ func (h *Handler) SaveMeasurement(w http.ResponseWriter, r *http.Request) {
 		if err == mongo.ErrNoDocuments {
 			// Create new customer
 			customer = &models.Customer{
-				Name: req.CustomerName,
+				Name:   req.CustomerName,
 				ShopID: shopID,
 			}
 			if err := h.customerRepo.Create(ctx, customer); err != nil {
@@ -592,14 +595,14 @@ func (h *Handler) GetDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	diagnostics := map[string]interface{}{
 		"system": map[string]interface{}{
-			"status":            "operational",
-			"uptime":            time.Since(serverStartTime).String(),
-			"goroutines":        runtime.NumGoroutine(),
-			"ram_usage_mb":      ramUsageMb,
-			"db_status":         dbStatus,
-			"db_latency_ms":     dbLatencyMs,
-			"redis_status":      redisStatus,
-			"redis_latency_ms":  redisLatencyMs,
+			"status":           "operational",
+			"uptime":           time.Since(serverStartTime).String(),
+			"goroutines":       runtime.NumGoroutine(),
+			"ram_usage_mb":     ramUsageMb,
+			"db_status":        dbStatus,
+			"db_latency_ms":    dbLatencyMs,
+			"redis_status":     redisStatus,
+			"redis_latency_ms": redisLatencyMs,
 		},
 		"ateliers": map[string]interface{}{
 			"total_registered_shops": totalShops,
@@ -608,9 +611,9 @@ func (h *Handler) GetDiagnostics(w http.ResponseWriter, r *http.Request) {
 			"total_measurements":     totalMeasurements,
 		},
 		"voice_ai": map[string]interface{}{
-			"total_whisper_minutes":  float64(totalMeasurements) * 0.5,
-			"estimated_cost_usd":     mockWhisperCost,
-			"average_latency_ms":     850,
+			"total_whisper_minutes": float64(totalMeasurements) * 0.5,
+			"estimated_cost_usd":    mockWhisperCost,
+			"average_latency_ms":    850,
 		},
 	}
 
@@ -644,11 +647,11 @@ func (h *Handler) ParseVoice(w http.ResponseWriter, r *http.Request) {
 		"model": "gpt-4o-mini",
 		"messages": []map[string]string{
 			{
-				"role": "system",
+				"role":    "system",
 				"content": "You are a professional tailor's transcription NLP translator. Extract body measurements mentioned in the text. Respond ONLY with a valid, clean JSON object mapping body parts to numbers. Numbers must be floats. If fractions like 'and a half' are mentioned, convert them (e.g. '24 and a half' -> 24.5). Do not include any explanation or markdown formatting, just raw JSON. If no measurements are found, return empty JSON {}.",
 			},
 			{
-				"role": "user",
+				"role":    "user",
 				"content": requestBody.Text,
 			},
 		},
@@ -703,7 +706,7 @@ func (h *Handler) ParseVoice(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "*")
-	
+
 	// Pass the clean extracted JSON back to client
 	w.Write([]byte(openAIResponse.Choices[0].Message.Content))
 }
